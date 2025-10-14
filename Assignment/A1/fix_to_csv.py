@@ -1,5 +1,4 @@
 import re
-import pandas as pd
 import argparse
 import csv
 import sys

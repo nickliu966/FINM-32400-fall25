@@ -2,6 +2,7 @@ import re
 import pandas as pd
 import argparse
 import csv
+import sys
 
 TAG_LOOKUP = {
     11: 'ClOrdID',
@@ -12,55 +13,61 @@ TAG_LOOKUP = {
     38: 'OrderQty',
     44: 'LimitPrice',
     6: 'AvgPx',
-    30: 'LastMkt',
-    35: 'MsgType',
-    150: 'ExecType',
-    39: 'OrdStatus',
-    40: 'OrdType'
+    30: 'LastMkt'
 }
 
 def parse_fix(msg):
+    """
 
+    Input: (str) A single line of fix message
 
-    # split transaction time from rest of fix that has tag=value
+    Return: (dict) A dictionary that stores each of the tag/value pair 
+    from the fix message
+
+    """
+
+    # split fix message time from rest of fix that has tag=value
     pattern = r'(\d+-\d+:\d+:\d+\.\d+)\s:?\s(8=.*)'
     match = re.match(pattern, msg)
 
-    time = match.group(1) # transaction time
+    time = match.group(1) # fix message transact time
     fix = match.group(2) # rest of fix message
 
     fix = fix.rstrip("\x01") # remove trailing soh
 
-    fields = fix.split('\x01')
+    fields = fix.split('\x01') # extract tag-value pair
 
-    parsed = {"time": time}
+    parsed_msg = {"time": time} # create a dict to store value for later csv writing
 
     for field in fields:
         tag, value = field.split("=", 1)
         tag_name = TAG_LOOKUP.get(int(tag), tag)
-        parsed[tag_name] = value
+        parsed_msg[tag_name] = value
     
-    return parsed
-
-parsed_messgaes = []
-
-with open("cleaned.fix", "r") as f:
-    for msg in f:
-        parsed = parse_fix(msg)
-        parsed_messgaes.append(parsed)
+    return parsed_msg
 
 
-for msg in parsed_messgaes[:1]:
-    print(msg)
+if len(sys.argv) < 5:
+    print("Missing arguments!\nPlease provide the --input_fix_file followed by " \
+    "the fix file name as well as --output_csv_file followed by the csv file name\n\n" \
+    "Usage Example:\n" \
+    "python fix_to_csv.py --input_fix_file cleaned.fix --output_csv_file output.csv\n")
+    sys.exit(1)
+
+parser = argparse.ArgumentParser(description="Parse FIX messages into CSV format.")
+parser.add_argument("--input_fix_file", help="Input FIX file.")
+parser.add_argument("--output_csv_file", help="Output CSV file.")
+args = parser.parse_args()
 
 
-fieldnames = list(TAG_LOOKUP.values())
+fieldnames = list(TAG_LOOKUP.values()) # find the tags of interest and input on these tags
 
-with open("cleaned.fix", "r") as f, open("output.csv", "w", newline='') as csvfile:
+with open(args.input_fix_file, "r") as f, open(args.output_csv_file, "w", newline='') as csvfile:
+
     writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
     writer.writeheader()
 
     for msg in f:
-        parsed = parse_fix(msg)
-        row = {col: parsed.get(col, '') for col in fieldnames}
+        parsed_msg = parse_fix(msg)
+        row = {col: parsed_msg.get(col, '') for col in fieldnames}
         writer.writerow(row)

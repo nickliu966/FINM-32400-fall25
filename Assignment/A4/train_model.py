@@ -1,12 +1,14 @@
-import argparse
 import pandas as pd
 import numpy as np
+
 from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import Lasso, Ridge, LinearRegression
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import r2_score, mean_squared_error
+
+import argparse
 import joblib
 from tqdm import tqdm
 
@@ -113,18 +115,18 @@ def merge_execution_and_quotes(exec_df: pd.DataFrame, quotes_df: pd.DataFrame) -
 def add_price_improvement(df: pd.DataFrame) -> pd.DataFrame:
     """
     Add price_improvement column to the dataframe.
-    BUY (Side == 1):  ask - execution
-    SELL           :  execution - bid
+    BUY (Side == 1):  limit - execution
+    SELL           :  execution - limit
     """
 
-    df = df.dropna(subset=["bid_price", "ask_price"]).copy()
+    #df = df.dropna(subset=["bid_price", "ask_price"]).copy()
 
     is_buy = df["Side"] == 1
 
     df.loc[:, "price_improvement"] = np.where(
         is_buy,
-        df["ask_price"] - df["execution_price"],   # BUY
-        df["execution_price"] - df["bid_price"]    # SELL
+        df["limit_price"] - df["execution_price"],   # BUY
+        df["execution_price"] - df["limit_price"]    # SELL
     )
 
     return df
@@ -145,7 +147,7 @@ def build_feature_df(df: pd.DataFrame) -> pd.DataFrame:
     ]
 
     df_model = df[features + ["price_improvement", "exchange"]].copy()
-    df_model = df_model.dropna()    # drop rows without NBBO
+    df_model = df_model.dropna()    # drop na before model training
 
     return df_model
 
@@ -174,7 +176,7 @@ def train_best_model_for_exchange(feature_df):
     },
     "linear_regression": {},
     "ridge": {
-        "model__alpha": [0.1, 1.0, 10, 100]
+        "model__alpha": [0.01, 0.1, 1.0, 10, 100]
     },
     "lasso": {
         "model__alpha": [0.001, 0.01, 0.1, 10, 100]

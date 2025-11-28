@@ -1,3 +1,14 @@
+"""
+
+This is the main file for model training.
+
+Usage: python train_model.py 
+    --exec_path /opt/assignment3/executions.csv
+    --quotes_path /opt/assignment4/quotes_2025-09-10_small.csv.gz
+
+
+"""
+
 import pandas as pd
 import numpy as np
 
@@ -5,7 +16,8 @@ from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import Lasso, Ridge, LinearRegression
-from sklearn.ensemble import RandomForestRegressor
+from sklearn.ensemble import RandomForestRegressor, \
+                             GradientBoostingRegressor
 from sklearn.metrics import r2_score, mean_squared_error
 
 import argparse
@@ -13,159 +25,25 @@ import joblib
 from tqdm import tqdm
 
 
-def read_executions(path: str) -> pd.DataFrame:
-    df = pd.read_csv(path)
+from build_dataframe_utils import (
+    read_executions,
+    read_quotes,
+    merge_execution_and_quotes,
+    add_price_improvement,
+    build_feature_df,
+)
 
-    # Convert timestamps: 20250910-04:02:34.713
-    df['OrderTransactTime'] = pd.to_datetime(
-        df['OrderTransactTime'], 
-        format='%Y%m%d-%H:%M:%S.%f'
-    )
-    df['ExecutionTransactTime'] = pd.to_datetime(
-        df['ExecutionTransactTime'], 
-        format='%Y%m%d-%H:%M:%S.%f'
-    )
-
-    # Consistent column names
-    df = df.rename(columns={
-        "OrderTransactTime": "order_time",
-        "ExecutionTransactTime": "execution_time",
-        "AvgPx": "execution_price",
-        "LastMkt": "exchange",
-        "Symbol": "symbol",
-        "OrderQty": "order_qty",
-        "LimitPrice": "limit_price"
-    })
-
-    # Make symbol categorical
-    df['symbol'] = df['symbol'].astype('category')
-
-    # Side as string ('1' = buy)
-    df['Side'] = df['Side'].astype(str)
-
-    # Filter to market hours: 09:30–16:00
-    market_open = pd.to_datetime("09:30").time()
-    market_close = pd.to_datetime("16:00").time()
-
-    df = df[
-        (df['order_time'].dt.time >= market_open) &
-        (df['order_time'].dt.time <= market_close)
-    ]
-
-    return df
-
-
-def read_quotes(path: str) -> pd.DataFrame:
-
-    df = pd.read_csv(path, compression="gzip")
-
-    # sip_timestamp convert to datetime
-    df['sip_timestamp'] = pd.to_datetime(df['sip_timestamp'], unit='ns')
-
-    # Convert ticker to category
-    df['ticker'] = df['ticker'].astype('category')
-
-    # Filter market hours
-    market_open = pd.to_datetime("09:30").time()
-    market_close = pd.to_datetime("16:00").time()
-
-    df = df[
-        (df['sip_timestamp'].dt.time >= market_open) &
-        (df['sip_timestamp'].dt.time <= market_close)
-    ]
-
-    print("read quotes successfule")
-    return df
-
-
-def merge_execution_and_quotes(exec_df: pd.DataFrame, quotes_df: pd.DataFrame) -> pd.DataFrame:
-    
-    exec_df["symbol"] = exec_df["symbol"].astype(str)
-    quotes_df["ticker"] = quotes_df["ticker"].astype(str)
-
-    # sort both sides
-    exec_df = exec_df.sort_values(
-        by=["order_time", "symbol"],
-        kind="mergesort"
-    ).reset_index(drop=True)
-
-    quotes_df = quotes_df.sort_values(
-        by=["sip_timestamp", "ticker"],
-        kind="mergesort"
-    ).reset_index(drop=True)
-
-    # merge using order_time as the lookup time
-    master = pd.merge_asof(
-        exec_df,
-        quotes_df,
-        left_on="order_time",
-        right_on="sip_timestamp",
-        left_by="symbol",
-        right_by="ticker",
-        direction="backward"
-    )
-
-    master = master.drop(columns=["ticker", "sip_timestamp"])
-
-    print("merging successful")
-
-    return master
-
-
-def add_price_improvement(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Add price_improvement column to the dataframe.
-    BUY (Side == 1):  limit - execution
-    SELL           :  execution - limit
-    """
-
-    #df = df.dropna(subset=["bid_price", "ask_price"]).copy()
-
-    is_buy = df["Side"] == 1
-
-    df.loc[:, "price_improvement"] = np.where(
-        is_buy,
-        df["limit_price"] - df["execution_price"],   # BUY
-        df["execution_price"] - df["limit_price"]    # SELL
-    )
-
-    return df
-
-
-def build_feature_df(df: pd.DataFrame) -> pd.DataFrame:
-    
-    df["side_num"] = np.where(df["Side"] == 1, 1, 0)
-
-    features = [
-        "side_num",
-        "order_qty",
-        "limit_price",
-        "bid_price",
-        "ask_price",
-        "bid_size",
-        "ask_size"
-    ]
-
-    df_model = df[features + ["price_improvement", "exchange"]].copy()
-    df_model = df_model.dropna()    # drop na before model training
-
-    return df_model
-
-
-def train_best_model_for_exchange(feature_df):
-    """
-    """
-    MODEL_CANDIDATES = {
+MODEL_CANDIDATES = {
     "random_forest": RandomForestRegressor(),
     "linear_regression": LinearRegression(),
     "ridge": Ridge(),
     "lasso": Lasso(),
-    #"gradient_boosting": GradientBoostingRegressor(),
+    "gradient_boosting": GradientBoostingRegressor(),
     #"xgboost": xgb.XGBRegressor(),
     #"lightgbm": lgb.LGBMRegressor()
 }
 
-    PARAM_GRIDS = {
+PARAM_GRIDS = {
     "random_forest": {        
         "model__n_estimators": [50, 100, 200, 400],
         "model__max_depth": [None, 5, 10, 20],
@@ -187,6 +65,29 @@ def train_best_model_for_exchange(feature_df):
     }
 }
 
+
+def train_model_single_exchange(feature_df: pd.DataFrame):
+    """
+    Train regression models for a single exchange and select the best one.
+
+    This function evaluates several candidate models (Random Forest, Linear Regression,
+    Ridge, Lasso). For models with hyperparameters, it performs a GridSearchCV using
+    R² as the scoring metric. The best-performing model on the validation set is returned.
+
+    feature_df (pd.DataFrame):
+        A DataFrame containing all observations for one exchange.
+        df include:
+            - predictors: side_num, order_qty, limit_price, bid_price,
+                          ask_price, bid_size, ask_size
+            - target: price_improvement
+            - column 'exchange' (will be dropped)
+
+    Returns:
+        best_model (sklearn.base.BaseEstimator):
+            The fitted sklearn Pipeline model that achieved the highest R².
+    """
+
+
     X = feature_df.drop(columns=["price_improvement", "exchange"])
     y = feature_df["price_improvement"]
 
@@ -196,10 +97,11 @@ def train_best_model_for_exchange(feature_df):
 
     best_score = -np.inf
     best_model = None
-    best_name = None
-    best_rmse = None
 
     for model_name, model in MODEL_CANDIDATES.items():
+        
+        print(f"Training {model_name} Initiated")
+        
         pipe = Pipeline([
             ("scaler", StandardScaler()),
             ("model", model)
@@ -231,13 +133,36 @@ def train_best_model_for_exchange(feature_df):
         if r2 > best_score:
             best_score = r2
             best_model = candidate
-            best_name = model_name
-            best_rmse = rmse
 
-    return best_model, best_name, best_score, best_rmse
+    return best_model
 
 
-def train_models_all_exchanges(feature_df):
+def train_models_all_exchanges(
+        feature_df: pd.DataFrame, 
+        min_rows: int = 100
+        ):
+
+    """
+    Use the train_model_single_exchange function and 
+    train one model per exchange and 
+    return a dictionary of fitted models.
+
+    feature_df (pd.DataFrame):
+        DataFrame containing features and target for all exchanges.
+        include:
+          - "exchange": exchange identifier
+          - "price_improvement": target variable
+          - All feature columns required by `train_model_single_exchange`.
+    min_rows (int), optional:
+        Minimum number of rows required for an exchange to be modeled.
+        Exchanges with fewer than `min_rows` observations are skipped.
+        Default is 100.
+
+    Returns:
+        best_model (sklearn estimator): 
+            The trained model (pipeline) with highest validation R².
+    """
+
     models = {}
     exchanges = feature_df["exchange"].unique()
 
@@ -245,24 +170,46 @@ def train_models_all_exchanges(feature_df):
         df_exchange = feature_df[feature_df["exchange"] == exchange]
 
         # skip exchanges without enough data
-        if len(df_exchange) < 100:
+        if len(df_exchange) < min_rows:
             continue
 
-        model_tuple = train_best_model_for_exchange(df_exchange)
-        models[exchange] = model_tuple[0] # recall that train function above 
-                                          # returns many things including performance metrics
-                                          # hence [0] selects the model itself
-        print(f"Model {model_tuple[0]} trained")
+        model = train_model_single_exchange(df_exchange)
+        models[exchange] = model
+
+        print(f"/n Model {model} trained /n")
 
     return models
 
 
-def main():
+def parse_args() -> argparse.Namespace:
+    """
+    Parse command-line arguments for training models on execution and quote data.
+
+    Returns:
+        argparse.Namespace
+            Parsed arguments with the following attributes:
+            - exec_path : str
+                Path to executions CSV file.
+            - quotes_path : str
+                Path to quotes file.
+    """
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--exec_path", required=True, help="Path to executions.csv")
-    parser.add_argument("--quotes_path", required=True, help="Path to quotes file")
-    args = parser.parse_args()
+
+    parser.add_argument("--exec_path", 
+                        required=True, 
+                        help="Path to executions.csv")
+
+    parser.add_argument("--quotes_path", 
+                        required=True, 
+                        help="Path to quotes file")
+
+    return parser.parse_args()
+
+
+def main():
+
+    args = parse_args()
 
     # read csv
     df_exec = read_executions(args.exec_path)

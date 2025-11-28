@@ -1,9 +1,9 @@
 import os
 import joblib
 import argparse
+from typing import Literal
 import numpy as np
 import pandas as pd
-from typing import Literal
 
 
 def load_models(model_path: str = "models") -> dict:
@@ -27,6 +27,38 @@ def best_price_improvement(
     ask_size: int
 ) -> tuple[str, float]:
     """
+    Choose the exchange with the highest predicted price improvement.
+
+    This function builds a single feature vector from the given order
+    and NBBO information, feeds it to each loaded model, and selects
+    the exchange whose model predicts the largest price improvement.
+
+    Input
+        symbol : str
+            Stock symbol for the order (not directly used).
+        side : {'B', 'S'}
+            Side of the order. 'B' for buy, 'S' for sell.
+        quantity : int
+            Order quantity.
+        limit_price : float
+            Limit price specified by the trader.
+        bid_price : float
+            Current NBBO bid price.
+        ask_price : float
+            Current NBBO ask price.
+        bid_size : int
+            Current NBBO bid size.
+        ask_size : int
+            Current NBBO ask size.
+
+    Returns:
+        Tuple[str, float]:
+            A pair (best_exchange, best_pi) where:
+            - best_exchange : str
+                The exchange ID whose model predicts 
+                the highest price improvement.
+            - best_pi : float
+                The predicted price improvement value for that exchange.
     """
 
     # The ML model uses numeric side: Buy=1, Sell=0
@@ -42,14 +74,12 @@ def best_price_improvement(
         ]
     )
 
-    best_exchange = None
-    best_pi = -np.inf
+    best_exchange: str | None = None
+    best_pi: float = -np.inf
 
     for exchange, model in MODELS.items():
-        try:
-            pred = model.predict(X)[0]
-        except Exception:
-            continue
+
+        pred = model.predict(X)[0]
 
         if pred > best_pi:
             best_pi = pred
@@ -57,7 +87,24 @@ def best_price_improvement(
 
     return best_exchange, best_pi
 
+
 def parse_args():
+
+    """
+    Parse command line arguments for the SOR CLI.
+
+    Returns:
+    argparse.Namespace
+        An object with attributes:
+        - symbol : str
+        - side : str ('B' or 'S')
+        - quantity : int
+        - limit : float
+        - bid : float
+        - ask : float
+        - bid_size : int
+        - ask_size : int
+    """
     parser = argparse.ArgumentParser(
         description="Predict best exchange for price improvement."
     )
@@ -90,7 +137,13 @@ def parse_args():
 
 
 def main():
-    
+    """
+
+    Reads order/NBBO parameters from the CLI, calls
+    best_price_improvement, and prints the chosen exchange
+    and its predicted price improvement.
+
+    """
     args = parse_args()
 
     exchange_id, pi = best_price_improvement(

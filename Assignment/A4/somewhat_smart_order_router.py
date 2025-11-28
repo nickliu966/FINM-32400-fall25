@@ -60,6 +60,17 @@ def best_price_improvement(
             - best_pi : float
                 The predicted price improvement value for that exchange.
     """
+    
+    if side not in ("B", "S"):
+        raise ValueError(f"Invalid side '{side}'. Must be 'B' or 'S'.")
+    if quantity <= 0:
+        raise ValueError("Quantity must be positive.")
+    if bid_size < 0 or ask_size < 0:
+        raise ValueError("Sizes cannot be negative.")
+    if limit_price <= 0:
+        raise ValueError("Limit price must be positive.")
+    if bid_price < 0 or ask_price < 0:
+        raise ValueError("Prices must be non-negative.")
 
     # The ML model uses numeric side: Buy=1, Sell=0
     side_num = 1 if side == "B" else 0
